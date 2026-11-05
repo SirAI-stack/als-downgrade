@@ -1,14 +1,27 @@
-<img src="docs/icon.png" width="128" alt="ALS Downgrade icon">
+<p align="center">
+  <img src="docs/icon.png" width="128" alt="ALS Downgrade icon">
+</p>
 
-# ALS Downgrade: open newer Ableton Live projects in an older version
+<h1 align="center">ALS Downgrade</h1>
 
-**Got "this Set was created with a newer version of Live"? Drop the project here and open it in the Live you have.**
+<p align="center">
+  <b>Open newer Ableton Live projects in the older version you have.</b><br>
+  Free macOS app. Your original file is never changed.
+</p>
 
-ALS Downgrade is a tiny free macOS app that converts an Ableton Live Set (`.als`) saved with a newer Live version into a Set your installed Live can open. Your original file is never changed.
+<p align="center">
+  <a href="https://github.com/SirAI-stack/als-downgrade/releases/latest"><b>Download for Mac</b></a>
+</p>
 
-![ALS Downgrade](docs/idle.png)
-![Converted project](docs/done.png)
-![About and supported versions](docs/info.png)
+<p align="center">
+  <img src="docs/idle.png" width="250" alt="Drop a project">
+  &nbsp;&nbsp;
+  <img src="docs/done.png" width="250" alt="Project converted">
+  &nbsp;&nbsp;
+  <img src="docs/info.png" width="170" alt="Supported versions">
+</p>
+
+Got **"this Set was created with a newer version of Live"**? ALS Downgrade converts an Ableton Live Set (`.als`) saved with a newer Live version into a Set your installed Live can open.
 
 ## Why it is different
 
@@ -32,18 +45,22 @@ Most guides tell you to edit the version number inside the `.als`. That is often
 
 Newer features cannot be carried back. Devices that do not exist in your version are removed, and third-party plugins must be installed. Back up important work.
 
-## Install
+## Download
 
-Requires macOS on Apple Silicon and Python 3 (`xcode-select --install`).
+1. Download **[ALS-Downgrade-1.0.dmg](https://github.com/SirAI-stack/als-downgrade/releases/latest)**.
+2. Open it and drag **ALS Downgrade** to **Applications**.
+3. First launch: macOS warns that the app is from an unidentified developer. Try to open it once, then go to **System Settings > Privacy & Security** and click **Open Anyway**.
+4. Drop your `.als` or project folder on the window.
+
+Works on Apple Silicon and Intel Macs, macOS 11 or later. If Apple's free Command Line Tools are missing, the app asks macOS to install them. Keep the `.als` inside its project folder so audio can be found.
+
+## Build from source
 
 ```bash
 git clone https://github.com/SirAI-stack/als-downgrade.git
 cd als-downgrade
 ./build.sh
-open dist
 ```
-
-Open **ALS Downgrade.app**, then drop your `.als` or project folder on it. Keep the `.als` inside its project folder so audio can be found.
 
 ## Command line
 

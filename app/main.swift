@@ -212,6 +212,12 @@ final class App: NSObject, NSApplicationDelegate {
         win.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         created = []; openBtn.isHidden = true; spin.startAnimation(nil)
         status("Converting…"); text.string = ""
+        if run("/usr/bin/xcode-select", ["-p"]) != 0 {
+            spin.stopAnimation(nil)
+            status("First install Apple's free developer tools.\nmacOS will show a window: click Install.")
+            _ = run("/usr/bin/xcode-select", ["--install"])
+            return
+        }
         let script = Bundle.main.path(forResource: "als_downgrade", ofType: "py")!
         DispatchQueue.global().async {
             let p = Process(); let pipe = Pipe()
