@@ -12,7 +12,7 @@ cp als_downgrade.py "$A/Contents/Resources/"
 cp app/Info.plist "$A/Contents/Info.plist"
 cp app/AppIcon.icns "$A/Contents/Resources/"
 codesign --force -s - "$A"
-D="dist/ALS-Downgrade-1.0.dmg"; T=$(mktemp -d)
+D="dist/ALS-Downgrade-1.1.dmg"; T=$(mktemp -d)
 cp -R "$A" "$T/"; ln -s /Applications "$T/Applications"
 rm -f "$D"; hdiutil create -volname "ALS Downgrade" -srcfolder "$T" -ov -format UDZO "$D" >/dev/null
 rm -rf "$T"

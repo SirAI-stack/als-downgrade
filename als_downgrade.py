@@ -41,6 +41,27 @@ SCALES = ["Major", "Minor", "Dorian", "Mixolydian", "Lydian", "Phrygian", "Locri
           "Messiaen 7"]
 SCALES_CERTAIN = 2  # only Major/Minor verified against real files
 
+# Pure screen state (zoom, scroll, open panels, selections). It carries no music,
+# so it is always replaced by the target Live's own defaults: leftovers from a
+# newer version here crash Live while you edit (clip detail view).
+UI_STATE = {
+    "LiveSet": {"SessionScrollPos", "TimeSelection", "SequencerNavigator", "IsContentSplitterOpen",
+                "IsExpressionSplitterOpen", "ExpressionLanes", "ContentLanes", "ViewStateFxSlotCount",
+                "ViewStateSessionMixerHeight", "ViewStateArrangerMixerVolumeSectionHeight",
+                "WaveformVerticalZoomFactor", "IsWaveformVerticalZoomActive", "ChooserBar", "ViewData",
+                "MidiFoldIn", "MidiFoldMode", "MultiClipLoopBarHeight", "TrackHeaderWidth",
+                "ViewStateMainWindowClipDetailOpen", "ViewStateMainWindowHiddenOtherDocViewTypeClipDetailOpen",
+                "ViewStateMainWindowHiddenOtherDocViewTypeDeviceDetailOpen", "ViewStateMainWindowDeviceDetailOpen",
+                "ViewStateSecondWindowClipDetailOpen", "ViewStateSecondWindowDeviceDetailOpen", "ViewStates",
+                "NoteAlgorithms", "SelectedDocumentViewInMainWindow"},
+    "AudioClip": {"ScrollerTimePreserver", "TimeSelection"},
+    "MidiClip": {"ScrollerTimePreserver", "TimeSelection", "NoteEditorFoldInZoom", "NoteEditorFoldInScroll",
+                 "NoteEditorFoldOutZoom", "NoteEditorFoldOutScroll", "NoteEditorFoldScaleZoom",
+                 "NoteEditorFoldScaleScroll"},
+}
+for _t in ("AudioTrack", "MidiTrack", "ReturnTrack", "GroupTrack", "MainTrack", "MasterTrack", "PreHearTrack"):
+    UI_STATE[_t] = {"IsContentSelectedInDocument", "PreferredContentViewMode", "ViewData"}
+FIXED_ORDER_LISTS = ()
 PRIMITIVES = {"Int", "Int64", "Bool", "Float", "Double", "String"}
 NUM = re.compile(r"^-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$|^-?inf$|^nan$", re.I)
 
@@ -322,9 +343,57 @@ class Converter:
                 for c in list(s):
                     s.remove(c)
 
+    def reset_ui_state(self, e=None, cls="LiveSet"):
+        """Replace every screen-state field with the target Live's own default."""
+        if e is None:
+            self.ui_reset = 0
+            e = self.live
+        mem = self.t.classes.get(cls)
+        names = UI_STATE.get(cls, ())
+        for i, c in enumerate(list(e)):
+            if c.tag in names:
+                ref = self.t.samples.get((cls, c.tag))
+                if ref is not None:
+                    new = copy.deepcopy(ref)
+                    self.fresh_ids(new)
+                    e.remove(c)
+                    e.insert(i, new)
+                    self.ui_reset += 1
+                continue
+            sub = None
+            if mem is not None and c.tag in mem:
+                sub = mem[c.tag]["Class"]
+            elif c.tag in self.t.classes:
+                sub = c.tag
+            self.reset_ui_state(c, sub if sub in self.t.classes else None)
+        return getattr(self, "ui_reset", 0)
+
+    def fix_fixed_order_lists(self):
+        """Live indexes some lists by position (MIDI Tools). Use the target's own
+        list when the order differs: a wrong order crashes Live while editing."""
+        n = 0
+        for tag in FIXED_ORDER_LISTS:
+            cur = self.live.find(tag)
+            ref = self.t.samples.get(("LiveSet", tag))
+            if cur is None or ref is None:
+                continue
+            if [c.tag for c in cur] == [c.tag for c in ref]:
+                continue
+            new = copy.deepcopy(ref)
+            self.fresh_ids(new)
+            kids = list(self.live)
+            self.live.remove(cur)
+            self.live.insert(kids.index(cur), new)
+            n += 1
+        if n:
+            self.warnings.append("MIDI Tools settings reset to defaults (their order "
+                                 "differs in this Live version and caused crashes).")
+        return n
+
     def run(self):
         self.walk(self.live, "LiveSet")
         self.fix_main_track()
+        self.reset_ui_state()
         self.prune_dangling()
         top = max([int(x.get("Id")) for x in self.doc.iter()
                    if x.get("Id", "").isdigit() and (x.tag.endswith("Target") or x.tag == "Pointee")]
@@ -353,12 +422,70 @@ def expand(paths):
     for p in paths:
         if os.path.isdir(p):
             found = sorted(glob.glob(os.path.join(glob.escape(p), "*.als")))
-            found = [f for f in found if not re.search(r" \(Live [\d.]+\)\.als$", f)]
+            found = [f for f in found if not re.search(r" \((Live [\d.]+|repaired)\)\.als$", f)]
             if not found:
                 print("No .als projects in " + p)
             out += found
         else:
             out.append(p)
+    return out
+
+
+def file_md5(path):
+    import hashlib
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def new_project_als(path, label, reuse=None):
+    import shutil
+    """Copy the whole project to "<Project> (<label>) Project" and return the new .als path.
+    Never overwrites work: a copy made from this exact source is reused (reuse[0] = True);
+    a different source gets a new numbered folder."""
+    import shutil
+    src_root = project_root(os.path.dirname(os.path.abspath(path)))
+    name = os.path.splitext(os.path.basename(path))[0]
+    base = re.sub(r" Project$", "", os.path.basename(src_root)) or name
+    base = re.sub(r" \((Live [\d.]+|repaired)\)( \d+)?$", "", base)
+    digest = file_md5(path)
+    # Keep every version of a project together: "<base> (versiones)/" holds the
+    # original project and its converted copies. Only real Live projects are moved.
+    if os.path.isdir(os.path.join(src_root, "Ableton Project Info")) and not os.path.basename(
+            os.path.dirname(src_root)).endswith(" (versiones)"):
+        box = os.path.join(os.path.dirname(src_root), "%s (versiones)" % base)
+        os.makedirs(box, exist_ok=True)
+        moved = os.path.join(box, os.path.basename(src_root))
+        if not os.path.exists(moved):
+            shutil.move(src_root, moved)
+            print("  Folder: " + box)
+            path = os.path.join(moved, os.path.relpath(os.path.abspath(path), src_root))
+            src_root = moved
+    n = 1
+    while True:
+        suffix = "" if n == 1 else " %d" % n
+        dst = os.path.join(os.path.dirname(src_root), "%s (%s)%s Project" % (base, label, suffix))
+        out = os.path.join(dst, "%s.als" % name)
+        mark = os.path.join(dst, "Ableton Project Info", "converted from %s.txt" % name)
+        if not os.path.exists(out):
+            break
+        try:
+            if open(mark).read().split()[0] == digest:
+                if reuse is not None:
+                    reuse[0] = True
+                return out
+        except (OSError, IndexError):
+            pass
+        n += 1
+    if not os.path.isdir(dst):
+        def skip(d, names):
+            return [x for x in names if x in ("Backup", ".DS_Store") or x.endswith(".als")]
+        shutil.copytree(src_root, dst, ignore=skip)
+    os.makedirs(os.path.dirname(mark), exist_ok=True)
+    with open(mark, "w") as f:
+        f.write(digest + "\n" + os.path.abspath(path) + "\n")
     return out
 
 
@@ -404,6 +531,8 @@ def main():
     p.add_argument("--schema", help="target schema, e.g. 11.0_11300 (experimental)")
     p.add_argument("-o", "--output", help="output file")
     p.add_argument("--check", action="store_true", help="report only, write nothing")
+    p.add_argument("--repair", action="store_true", help="also clean files already in this Live's format")
+    p.add_argument("--in-place", action="store_true", help="write next to the original instead of a new project copy")
     p.add_argument("-v", "--verbose", action="store_true")
     a = p.parse_args()
     app = a.app
@@ -429,19 +558,38 @@ def main():
             continue
         src = doc.get("MinorVersion", "?")
         print("  Saved with %s, format %s" % (doc.get("Creator", "?"), src))
-        if version_key(src) < version_key(t.minor):
+        same = version_key(src) <= version_key(t.minor)
+        if same and not a.repair:
             print("  Already compatible: open it directly in Live.")
             continue
-        if doc.get("MinorVersion", "").split(".")[0] != t.minor.split(".")[0]:
-            print("  ! EXPERIMENTAL: converting across major Live versions.")
         cv = Converter(doc, t)
-        cv.run()
-        cv.fix_samples(os.path.dirname(os.path.abspath(path)))
-        report(cv, a.verbose)
+        if same:
+            cv.fix_main_track()
+            n = cv.reset_ui_state()
+            print("  Repaired: %d screen-state fields reset to this Live's defaults." % n)
+        else:
+            if src.split(".")[0] != t.minor.split(".")[0]:
+                print("  ! EXPERIMENTAL: converting across major Live versions.")
+            cv.run()
+        label = "repaired" if same else "Live " + t.version
         if a.check:
+            cv.fix_samples(os.path.dirname(os.path.abspath(path)))
+            report(cv, a.verbose)
             continue
-        base, ext = os.path.splitext(path)
-        out = a.output or "%s (Live %s)%s" % (base, t.version, ext)
+        if a.output:
+            out = a.output
+        elif a.in_place:
+            out = "%s (%s).als" % (os.path.splitext(path)[0], label)
+        else:
+            reused = [False]
+            out = new_project_als(path, label, reused)
+            if reused[0]:
+                print("  Existing copy kept (your work in it is not touched).")
+                print("  Created: " + out)
+                continue
+        # link audio to the copy inside the new project (falls back to the original)
+        cv.fix_samples(os.path.dirname(os.path.abspath(out)))
+        report(cv, a.verbose)
         save(doc, out)
         print("  Created: " + out)
     sys.exit(1 if failed else 0)

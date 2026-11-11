@@ -90,7 +90,7 @@ final class InfoController: NSViewController {
         let body = NSFont.systemFont(ofSize: 12), head = NSFont.systemFont(ofSize: 12, weight: .semibold)
         let dim = NSColor.secondaryLabelColor
         add("ALS Downgrade", .systemFont(ofSize: 17, weight: .semibold))
-        add("Version 1.0", body, dim, after: 10)
+        add("Version 1.1", body, dim, after: 10)
         add("Opens Ableton Live projects saved with a newer version in the Live you have. Your original file is never changed.", body, after: 12)
         add("Supported versions", head)
         add("✓  Live 12.4 → Live 12.0: tested with real projects", body)
@@ -222,7 +222,7 @@ final class App: NSObject, NSApplicationDelegate {
         DispatchQueue.global().async {
             let p = Process(); let pipe = Pipe()
             p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-            p.arguments = [script] + urls.map { $0.path }
+            p.arguments = [script, "--repair"] + urls.map { $0.path }
             p.standardOutput = pipe; p.standardError = pipe
             var out = ""
             do {
@@ -312,16 +312,12 @@ final class App: NSObject, NSApplicationDelegate {
         done("Live did not load the project. Check for a dialog.")
     }
     func done(_ m: String) { say(m); DispatchQueue.main.async { self.status(m) } }
+    // Abre con la app predeterminada de los .als (AbletonBlock), que ya sabe
+    // arrancar Live y entregarle el proyecto. Nunca lanza Live por su cuenta.
     @objc func openLive() {
         guard let file = created.first.map({ URL(fileURLWithPath: $0) }) else { return }
-        guard let live = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.ableton.live") else {
-            status("Ableton Live not found"); return
-        }
-        openBtn.isEnabled = false; spin.startAnimation(nil)
-        DispatchQueue.global().async {
-            self.deliver(file, livePath: live.path)
-            DispatchQueue.main.async { self.spin.stopAnimation(nil); self.openBtn.isEnabled = true }
-        }
+        NSWorkspace.shared.open(file)
+        status("✓ Sent to Live")
     }
 }
 
