@@ -10,9 +10,9 @@ lipo -create dist/arm64 dist/x86_64 -output "$A/Contents/MacOS/ALSDowngrade"
 rm dist/arm64 dist/x86_64
 cp als_downgrade.py "$A/Contents/Resources/"
 cp app/Info.plist "$A/Contents/Info.plist"
-cp app/AppIcon.icns "$A/Contents/Resources/"
+cp app/AppIcon.icns app/AlsDocument.icns app/ProjectFolder.png "$A/Contents/Resources/"
 codesign --force -s - "$A"
-D="dist/ALS-Downgrade-1.2.dmg"; T=$(mktemp -d)
+D="dist/ALS-Downgrade-1.3.dmg"; T=$(mktemp -d)
 cp -R "$A" "$T/"; ln -s /Applications "$T/Applications"
 rm -f "$D"; hdiutil create -volname "ALS Downgrade" -srcfolder "$T" -ov -format UDZO "$D" >/dev/null
 rm -rf "$T"

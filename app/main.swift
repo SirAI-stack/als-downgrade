@@ -90,7 +90,7 @@ final class InfoController: NSViewController {
         let body = NSFont.systemFont(ofSize: 12), head = NSFont.systemFont(ofSize: 12, weight: .semibold)
         let dim = NSColor.secondaryLabelColor
         add("ALS Downgrade", .systemFont(ofSize: 17, weight: .semibold))
-        add("Version 1.2", body, dim, after: 10)
+        add("Version 1.3", body, dim, after: 10)
         add("Opens Ableton Live projects saved with a newer version in the Live you have. Your original file is never changed.", body, after: 12)
         add("Supported versions", head)
         add("✓  Live 12.4 → Live 12.0: tested with real projects", body)
@@ -238,6 +238,7 @@ final class App: NSObject, NSApplicationDelegate {
                 self.spin.stopAnimation(nil)
                 self.text.string = out
                 self.created = files
+                self.markWithIcons(files)
                 self.openBtn.isEnabled = true; self.openBtn.isHidden = files.isEmpty
                 if let f = files.first {
                     let n = URL(fileURLWithPath: f).lastPathComponent
@@ -251,6 +252,25 @@ final class App: NSObject, NSApplicationDelegate {
             }
         }
     }
+    // Gives converted projects their own look in Finder: the .als, its project
+    // folder and the "(versiones)" folder that keeps every version together.
+    func markWithIcons(_ files: [String]) {
+        let doc = Bundle.main.image(forResource: "AlsDocument"), folder = Bundle.main.image(forResource: "ProjectFolder")
+        for f in files {
+            let als = URL(fileURLWithPath: f), project = als.deletingLastPathComponent(), box = project.deletingLastPathComponent()
+            if let d = doc { NSWorkspace.shared.setIcon(d, forFile: als.path, options: []) }
+            guard let fo = folder else { continue }
+            NSWorkspace.shared.setIcon(fo, forFile: project.path, options: [])
+            if box.lastPathComponent.hasSuffix(" (versiones)") {
+                NSWorkspace.shared.setIcon(fo, forFile: box.path, options: [])
+                for sub in (try? FileManager.default.contentsOfDirectory(at: box, includingPropertiesForKeys: nil)) ?? []
+                where FileManager.default.fileExists(atPath: sub.appendingPathComponent("Ableton Project Info").path) {
+                    NSWorkspace.shared.setIcon(fo, forFile: sub.path, options: [])
+                }
+            }
+        }
+    }
+
     func liveLog() -> String? {
         let base = NSHomeDirectory() + "/Library/Preferences/Ableton"
         let dirs = (try? FileManager.default.contentsOfDirectory(atPath: base)) ?? []
