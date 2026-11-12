@@ -336,12 +336,19 @@ class Converter:
             print("  ! Missing audio: " + m)
 
     def fix_main_track(self):
-        """ClipSlots in the Main track FreezeSequencer crash Live 12.0."""
-        for t in ("MainTrack", "MasterTrack"):
-            s = self.live.find(t + "/DeviceChain/FreezeSequencer/AudioSequencer/ClipSlotList")
-            if s is not None and self.t.minor.startswith("12.0_120"):
-                for c in list(s):
-                    s.remove(c)
+        """Tracks without clips of their own (Main, groups, returns) cannot be frozen
+        in Live 12.0: freeze clip slots on them make Live crash while loading."""
+        if not self.t.minor.startswith("12.0_120"):
+            return
+        n = 0
+        for tag in ("MainTrack", "MasterTrack", "PreHearTrack"):
+            for s in self.live.findall(tag + "/DeviceChain/FreezeSequencer/AudioSequencer/ClipSlotList"):
+                n += len(s); s[:] = []
+        for t in self.live.find("Tracks"):
+            if t.tag in ("GroupTrack", "ReturnTrack"):
+                for s in t.findall("DeviceChain/FreezeSequencer/ClipSlotList"):
+                    n += len(s); s[:] = []
+        return n
 
     def reset_ui_state(self, e=None, cls="LiveSet"):
         """Replace every screen-state field with the target Live's own default."""
@@ -448,8 +455,33 @@ def new_project_als(path, label, reuse=None):
     import shutil
     src_root = project_root(os.path.dirname(os.path.abspath(path)))
     name = os.path.splitext(os.path.basename(path))[0]
+    # ":" in a file name (e.g. a time "12:11:26") is a path separator for Live:
+    # it shows the set as "26" and resolves its project wrongly. Never write one.
+    name = re.sub(r"[:/]", "-", name)
+    if re.search(r" \((Live [\d.]+|repaired)\)( \d+)? Project$", os.path.basename(src_root)):
+        # the file is inside a project that is already a converted copy: convert next to it
+        digest = file_md5(path)
+        n = 1
+        while True:
+            out = os.path.join(os.path.dirname(os.path.abspath(path)),
+                               "%s (%s)%s.als" % (name, label, "" if n == 1 else " %d" % n))
+            mark = os.path.join(src_root, "Ableton Project Info", "converted from %s.txt" % name)
+            if not os.path.exists(out):
+                os.makedirs(os.path.dirname(mark), exist_ok=True)
+                with open(mark, "w") as f:
+                    f.write(digest + "\n" + os.path.abspath(path) + "\n")
+                return out
+            try:
+                if open(mark).read().split()[0] == digest:
+                    if reuse is not None:
+                        reuse[0] = True
+                    return out
+            except (OSError, IndexError):
+                pass
+            n += 1
     base = re.sub(r" Project$", "", os.path.basename(src_root)) or name
     base = re.sub(r" \((Live [\d.]+|repaired)\)( \d+)?$", "", base)
+    base = re.sub(r"[:/]", "-", base)
     digest = file_md5(path)
     # Keep every version of a project together: "<base> (versiones)/" holds the
     # original project and its converted copies. Only real Live projects are moved.

@@ -58,7 +58,7 @@ Newer features cannot be carried back. Devices that do not exist in your version
 
 ## Download
 
-1. Download **[ALS-Downgrade-1.1.dmg](https://github.com/SirAI-stack/als-downgrade/releases/latest)**.
+1. Download **[ALS-Downgrade-1.2.dmg](https://github.com/SirAI-stack/als-downgrade/releases/latest)**.
 2. Open it and drag **ALS Downgrade** to **Applications**.
 3. First launch: macOS warns that the app is from an unidentified developer. Try to open it once, then go to **System Settings > Privacy & Security** and click **Open Anyway**.
 4. Drop your `.als` or project folder on the window.

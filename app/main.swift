@@ -90,7 +90,7 @@ final class InfoController: NSViewController {
         let body = NSFont.systemFont(ofSize: 12), head = NSFont.systemFont(ofSize: 12, weight: .semibold)
         let dim = NSColor.secondaryLabelColor
         add("ALS Downgrade", .systemFont(ofSize: 17, weight: .semibold))
-        add("Version 1.1", body, dim, after: 10)
+        add("Version 1.2", body, dim, after: 10)
         add("Opens Ableton Live projects saved with a newer version in the Live you have. Your original file is never changed.", body, after: 12)
         add("Supported versions", head)
         add("✓  Live 12.4 → Live 12.0: tested with real projects", body)
