@@ -91,6 +91,18 @@ def app_version(app):
         return plistlib.load(f)["CFBundleShortVersionString"].split()[0]
 
 
+FORMATS = os.path.expanduser("~/Library/Application Support/ALS Downgrade/formats")
+
+
+def default_schema():
+    """Output format chosen for this Mac (formats/default.txt), e.g. a format that is
+    verified to open, which the installed Live then upgrades by itself."""
+    try:
+        return open(os.path.join(FORMATS, "default.txt")).read().strip() or None
+    except OSError:
+        return None
+
+
 class Target:
     """What the target version understands: schema + native examples."""
 
@@ -113,8 +125,15 @@ class Target:
         self.samples, self.attrs = {}, collections.defaultdict(set)
         self.instances, self.present = collections.Counter(), collections.Counter()
         self.seen_tags = set()
+        # Sets really saved by a Live that writes this format (kept in the format library)
+        # teach the same defaults as Live's own templates, even after Live was updated.
+        lib = os.path.join(FORMATS, self.minor + "-live")
+        self.from_library = not self.exact_app and os.path.isdir(lib)
         if self.exact_app:
             self._harvest(res)
+        elif self.from_library:
+            self.exact_app = True
+            self._harvest(lib)
 
     def _harvest(self, res):
         """Learn default values from the .als files shipped with Live."""
@@ -126,6 +145,10 @@ class Target:
                 continue
             if doc.get("MinorVersion", "").split("_")[0] != self.minor.split("_")[0]:
                 continue
+            # header of a set saved by exactly this Live: the converted file copies it
+            if doc.get("MinorVersion") == self.minor and not hasattr(self, "native_root"):
+                self.native_root = dict(doc.attrib)
+                self.native_overwrite = doc[0].find("OverwriteProtectionNumber")
             for e in doc.iter():
                 self.seen_tags.add(e.tag)
                 self.attrs[e.tag].update(e.attrib)
@@ -183,18 +206,21 @@ class Converter:
         return None
 
     def fix_scale(self, e):
+        """Live 12.0 stores the scale as text ("Major"); 12.1+ as an index. Follow the target."""
         name = e.find("Name")
         if name is None:
             return
         v = name.get("Value", "")
-        if v.isdigit():
+        target_is_text = "String" in self.t.classes.get("ScaleInformation", {}).get("Name", {}).get("Class", "String")
+        if target_is_text and v.isdigit():
             i = int(v)
             name.set("Value", SCALES[i] if i < len(SCALES) else "Major")
             if i >= SCALES_CERTAIN:
-                msg = "Scale index %d converted to '%s': please check it." % (
-                    i, name.get("Value"))
+                msg = "Scale index %d converted to '%s': please check it." % (i, name.get("Value"))
                 if msg not in self.warnings:
                     self.warnings.append(msg)
+        elif not target_is_text and not v.isdigit():
+            name.set("Value", str(SCALES.index(v)) if v in SCALES else "0")
 
     def check_value(self, holder, attr, prim):
         v = holder.get(attr)
@@ -213,6 +239,25 @@ class Converter:
         if mem is None:
             self.walk_container(e)
             return
+        # A parameter changed kind between versions: automatable (<Manual>)
+        # in the source, plain Remoteable (Value="...") in the target, or back.
+        vinfo = mem.get("Value")
+        if vinfo is not None and vinfo["Type"] == "-4" and "Value" not in e.attrib:
+            man = e.find("Manual")
+            if man is not None and man.get("Value") is not None:
+                e.set("Value", man.get("Value"))
+                for c in list(e):
+                    e.remove(c)
+                self.renamed["%s (automatable -> plain)" % e.tag] += 1
+        elif "Manual" in mem and "Value" in e.attrib and e.find("Manual") is None:
+            parent = getattr(self, "_parent_cls", None)
+            d = self.default_for(parent, e.tag, {"Class": cls}) if parent else None
+            v = e.get("Value")
+            if d is not None and d.find("Manual") is not None:
+                e.attrib.clear()
+                e.extend(list(d))
+                e.find("Manual").set("Value", v)
+                self.renamed["%s (plain -> automatable)" % e.tag] += 1
         # attributes the target version never writes
         known = self.t.attrs.get(e.tag)
         if known is not None and self.t.exact_app:
@@ -223,6 +268,13 @@ class Converter:
             if info["Type"] == "-4" and tag in e.attrib:
                 if not self.check_value(e, tag, info["Class"]):
                     self.bad_values["%s.%s" % (cls, tag)] += 1
+                    v, p = e.get(tag), info["Class"]
+                    # a member changed type between versions (e.g. Saturator
+                    # Oversampling: Bool in 12.4, Enum in 12.0)
+                    if p in ("Int", "Int64") and v in ("true", "false"):
+                        e.set(tag, "1" if v == "true" else "0")
+                    elif p == "Bool" and re.match(r"^-?\d+$", v or ""):
+                        e.set(tag, "false" if int(v) == 0 else "true")
         for c in list(e):
             new = RENAMES_IN_CLASS.get((cls, c.tag)) or RENAMES.get(c.tag)
             if c.tag not in mem and new in mem:
@@ -245,6 +297,7 @@ class Converter:
             elif info["Class"] in PRIMITIVES:
                 pass
             else:
+                self._parent_cls = cls
                 self.walk(c, info["Class"])
         present = {c.tag for c in e}
         for tag, info in mem.items():
@@ -325,10 +378,10 @@ class Converter:
                 real = index.get(os.path.basename(r or old))
             if real:
                 if real != old:
-                    path.set("Value", real)
+                    path.set("Value", disk_form(real))
                     fixed += 1
                 if rel is not None:
-                    rel.set("Value", os.path.relpath(real, root))
+                    rel.set("Value", os.path.relpath(disk_form(real), disk_form(root)))
             elif not os.path.exists(old):
                 missing.add(os.path.basename(r or old))
         print("  Audio: %d linked to your project, %d missing" % (fixed, len(missing)))
@@ -406,11 +459,46 @@ class Converter:
                    if x.get("Id", "").isdigit() and (x.tag.endswith("Target") or x.tag == "Pointee")]
                   + [self.next_id - 1])
         self.live.find("NextPointeeId").set("Value", str(top + 1))
-        self.doc.set("MajorVersion", self.t.major)
-        self.doc.set("MinorVersion", self.t.minor)
-        self.doc.set("SchemaChangeCount", self.t.change_count)
-        self.doc.set("Creator", "Ableton Live " + self.t.version)
-        self.doc.set("Revision", "")
+        self.native_header()
+
+    def native_header(self):
+        """Make the file look exactly like one saved by the target Live: its root
+        attributes, its overwrite protection number and Live Object Model ids at 0.
+        Leftover header values from a newer Live crash Live 12.2 a second after loading."""
+        nat = getattr(self.t, "native_root", None)
+        for k in list(self.doc.attrib):
+            del self.doc.attrib[k]
+        if nat:
+            self.doc.attrib.update(nat)
+        else:
+            self.doc.attrib.update({"MajorVersion": self.t.major, "MinorVersion": self.t.minor,
+                                    "SchemaChangeCount": self.t.change_count,
+                                    "Creator": "Ableton Live " + self.t.version, "Revision": ""})
+        opn = getattr(self.t, "native_overwrite", None)
+        if opn is not None and self.live.find("OverwriteProtectionNumber") is not None:
+            self.live.find("OverwriteProtectionNumber").set("Value", opn.get("Value"))
+        for e in self.doc.iter():
+            if e.tag in ("LomId", "LomIdView"):
+                e.set("Value", "0")
+            if "LomId" in e.attrib:
+                e.set("LomId", "0")
+
+
+def disk_form(path):
+    """The path exactly as the file system stores it (e.g. "i" + accent vs "\u00ed").
+    macOS treats both spellings as equal, but Live only finds audio by the stored one."""
+    import unicodedata
+    path = os.path.abspath(path)
+    out = "/"
+    for part in path.strip("/").split("/"):
+        try:
+            names = os.listdir(out)
+        except OSError:
+            names = []
+        want = unicodedata.normalize("NFC", part)
+        match = next((n for n in names if unicodedata.normalize("NFC", n) == want), part)
+        out = os.path.join(out, match)
+    return out
 
 
 def project_root(folder):
@@ -428,14 +516,15 @@ def expand(paths):
     out = []
     for p in paths:
         if os.path.isdir(p):
-            found = sorted(glob.glob(os.path.join(glob.escape(p), "*.als")))
+            found = sorted(f for f in glob.glob(os.path.join(glob.escape(p), "*.als")) if not os.path.basename(f).startswith("._"))
             found = [f for f in found if not re.search(r" \((Live [\d.]+|repaired)\)\.als$", f)]
             if not found:
                 print("No .als projects in " + p)
             out += found
         else:
             out.append(p)
-    return out
+    # "._name.als" are macOS metadata files on exFAT/FAT disks, not Live Sets
+    return [x for x in out if not os.path.basename(x).startswith("._")]
 
 
 def file_md5(path):
@@ -521,6 +610,102 @@ def new_project_als(path, label, reuse=None):
     return out
 
 
+def archive_original(path, creator):
+    """Sync mode: move the newer .als into "<project>/Historial/" with its date and Live
+    version, so the converted Set can take its place under the same name."""
+    import shutil, time
+    root = project_root(os.path.dirname(os.path.abspath(path)))
+    hist = os.path.join(root, "Historial")
+    os.makedirs(hist, exist_ok=True)
+    name = os.path.splitext(os.path.basename(path))[0]
+    ver = (re.search(r"Live ([\d.]+)", creator or "") or [None, "?"])[1]
+    stamp = time.strftime("%Y-%m-%d %H.%M", time.localtime(os.path.getmtime(path)))
+    dst = os.path.join(hist, "%s [%s, Live %s].als" % (name, stamp, ver))
+    n = 2
+    while os.path.exists(dst):
+        dst = os.path.join(hist, "%s [%s, Live %s] %d.als" % (name, stamp, ver, n)); n += 1
+    shutil.move(path, dst)
+    return dst
+
+
+def song_key(name):
+    """Base name of a song, ignoring what Live or people add when saving copies."""
+    n = os.path.splitext(name)[0].lower()
+    for pat in (r"\[[^\]]*\]", r"\((live [\d.]+|repaired|copia|copy)\)", r"\b(copia|copy)\b",
+                r"\d{1,2}[-:.]\d{1,2}[-:.]\d{2,4}", r"\s\d+$"):
+        n = re.sub(pat, " ", n).strip()
+    return re.sub(r"[^a-z0-9]+", "", n)
+
+
+def older_siblings(path):
+    """Other Sets of the same song in the same folder, older than this one."""
+    d, me = os.path.dirname(os.path.abspath(path)), os.path.basename(path)
+    key, t = song_key(me), os.path.getmtime(path)
+    out = []
+    for f in os.listdir(d):
+        p = os.path.join(d, f)
+        if f != me and f.endswith(".als") and song_key(f) == key and os.path.getmtime(p) < t:
+            out.append(p)
+    return sorted(out, key=os.path.getmtime)
+
+
+PLUGIN_DIRS = ["/Library/Audio/Plug-Ins/Components", "/Library/Audio/Plug-Ins/VST3", "/Library/Audio/Plug-Ins/VST",
+               os.path.expanduser("~/Library/Audio/Plug-Ins/Components"),
+               os.path.expanduser("~/Library/Audio/Plug-Ins/VST3"), os.path.expanduser("~/Library/Audio/Plug-Ins/VST")]
+
+
+def norm(name):
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def installed_plugins():
+    names = set()
+    for d in PLUGIN_DIRS:
+        for f in (os.listdir(d) if os.path.isdir(d) else []):
+            names.add(norm(os.path.splitext(f)[0]))
+    return names
+
+
+def plugin_report(doc):
+    """List third-party plugins used by the Set that are not installed on this Mac,
+    with the tracks that use them. Matches by name across AU, VST and VST3."""
+    have = installed_plugins()
+    used = collections.OrderedDict()
+    for track in doc.iter():
+        if track.tag not in ("AudioTrack", "MidiTrack", "GroupTrack", "ReturnTrack", "MainTrack", "MasterTrack"):
+            continue
+        tname = (track.find("Name/EffectiveName") if track.find("Name/EffectiveName") is not None
+                 else track.find("Name/UserName"))
+        tname = tname.get("Value") if tname is not None else track.tag
+        for dev in track.iter():
+            if dev.tag not in ("AuPluginDevice", "PluginDevice", "Vst3PluginDevice"):
+                continue
+            pname = None
+            for path in ("PluginDesc/AuPluginInfo/Name", "PluginDesc/VstPluginInfo/PlugName", "PluginDesc/Vst3PluginInfo/Name"):
+                e = dev.find(path)
+                if e is not None and e.get("Value"):
+                    pname = e.get("Value"); break
+            if pname:
+                used.setdefault(pname, [])
+                if tname not in used[pname]:
+                    used[pname].append(tname)
+    missing = collections.OrderedDict()
+    for pname, tracks in used.items():
+        key = norm(pname)
+        base = re.sub(r"\d+$", "", key)
+        if key in have or any(h.startswith(key) or key.startswith(h) for h in have if len(h) > 3):
+            continue
+        alt = [h for h in have if base and h.startswith(base)]
+        missing[pname] = (tracks, alt)
+    return missing
+
+
+def print_plugins(doc):
+    for pname, (tracks, alt) in plugin_report(doc).items():
+        extra = " (installed: another version)" if alt else ""
+        print("  ! Missing plugin: %s%s -- tracks: %s" % (pname, extra, ", ".join(tracks[:6])))
+
+
 def load(path):
     with open(path, "rb") as f:
         raw = f.read()
@@ -536,6 +721,22 @@ def save(doc, path):
     with gzip.GzipFile(tmp, "wb", mtime=0) as f:
         f.write(data)
     os.replace(tmp, path)
+    park_dotfile(path)
+
+
+def park_dotfile(path):
+    """On exFAT/FAT disks macOS keeps metadata in a hidden "._name" file next to it, and
+    Live opens that one instead of the set ("corrupt"). Move it aside; it holds no music."""
+    d = os.path.join(os.path.expanduser("~/Library/Application Support/ALS Downgrade"), "ocultos")
+    dot = os.path.join(os.path.dirname(os.path.abspath(path)), "._" + os.path.basename(path))
+    if os.path.isfile(dot):
+        os.makedirs(d, exist_ok=True)
+        import time
+        import shutil
+        try:
+            shutil.move(dot, os.path.join(d, "%d %s" % (int(time.time()), os.path.basename(dot))))
+        except OSError:
+            pass
 
 
 def report(cv, verbose):
@@ -565,15 +766,31 @@ def main():
     p.add_argument("--check", action="store_true", help="report only, write nothing")
     p.add_argument("--repair", action="store_true", help="also clean files already in this Live's format")
     p.add_argument("--in-place", action="store_true", help="write next to the original instead of a new project copy")
+    p.add_argument("--sync", action="store_true",
+                   help="one file per project: archive the newer .als in Historial/ and replace it")
+    p.add_argument("--plugins", action="store_true", help="only report missing plugins (fast)")
     p.add_argument("-v", "--verbose", action="store_true")
     a = p.parse_args()
+    if a.plugins:
+        for path in expand(a.als):
+            d = os.path.dirname(os.path.abspath(path)); key = song_key(os.path.basename(path))
+            for f in sorted(os.listdir(d)):
+                q = os.path.join(d, f)
+                if (f.endswith(".als") and q != os.path.abspath(path) and song_key(f) == key
+                        and os.path.getmtime(q) > os.path.getmtime(path) + 60):
+                    print("  ! Newer copy: " + q)
+            try:
+                print_plugins(load(path))
+            except (OSError, ET.ParseError, EOFError) as ex:
+                print("  ERROR: cannot read file (%s)" % ex)
+        return
     app = a.app
     if not app:
         apps = find_apps()
         if not apps:
             sys.exit("Ableton Live not found in /Applications; use --app.")
         app = apps[-1][2]
-    t = Target(app, a.schema)
+    t = Target(app, a.schema or default_schema())
     print("Target: Live %s, format %s" % (t.version, t.minor))
     if version_key(t.minor) < (10, 0, 0):
         sys.exit("Target formats older than Live 10 are not supported.")
@@ -588,7 +805,11 @@ def main():
             print("  ERROR: cannot read file (%s)" % ex)
             failed += 1
             continue
+        if a.plugins:
+            print_plugins(doc)
+            continue
         src = doc.get("MinorVersion", "?")
+        creator = doc.get("Creator", "")
         print("  Saved with %s, format %s" % (doc.get("Creator", "?"), src))
         same = version_key(src) <= version_key(t.minor)
         if same and not a.repair:
@@ -597,6 +818,7 @@ def main():
         cv = Converter(doc, t)
         if same:
             cv.fix_main_track()
+            cv.native_header()
             n = cv.reset_ui_state()
             print("  Repaired: %d screen-state fields reset to this Live's defaults." % n)
         else:
@@ -610,6 +832,16 @@ def main():
             continue
         if a.output:
             out = a.output
+        elif a.sync and not same:
+            # Live's "Save As" in the studio may have left the song under a new name:
+            # the oldest copy of the same song gives the name to keep.
+            sibs = older_siblings(path)
+            canonical = sibs[0] if sibs else path
+            for sp in sibs:
+                print("  Older copy kept in: " + archive_original(sp, load(sp).get("Creator", "")))
+            hist = archive_original(path, creator)
+            print("  Original kept in: " + hist)
+            out = canonical
         elif a.in_place:
             out = "%s (%s).als" % (os.path.splitext(path)[0], label)
         else:
@@ -622,6 +854,7 @@ def main():
         # link audio to the copy inside the new project (falls back to the original)
         cv.fix_samples(os.path.dirname(os.path.abspath(out)))
         report(cv, a.verbose)
+        print_plugins(doc)
         save(doc, out)
         print("  Created: " + out)
     sys.exit(1 if failed else 0)

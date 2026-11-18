@@ -74,6 +74,7 @@ Converted projects get their own icons, so you always know which version is whic
 | From | To | Status |
 |---|---|---|
 | Live 12.4 | Live 12.0 | ✅ Tested in Live with real projects |
+| Live 12.4 | Live 12.2 | ✅ Tested in Live with real projects |
 | Other Live 12 versions | An older Live 12 | Expected to work, not tested |
 | Live 12 | Live 10 or 11 | ⚠️ Experimental, command line only, may not open |
 | Anything | Live 9 or older | ❌ Not supported |
@@ -81,6 +82,13 @@ Converted projects get their own icons, so you always know which version is whic
 Tested with real projects including audio and MIDI tracks, group tracks, return tracks, Drum Racks, MPE notes, take lanes, warped audio and third-party plugins.
 
 **What cannot come back:** devices and features that do not exist in your Live (for example newer MIDI Tools). The app lists everything it removes. Third-party plugins must be installed on your Mac.
+
+## What's new in 1.4
+
+- Opens Live 12.4 projects in **Live 12.2** reliably.
+- Fixes "corrupt" errors with Saturator and other devices whose settings changed type between versions.
+- Audio with accented file names (like *título*) is found on external drives.
+- Hidden `._` files on exFAT drives no longer get opened by mistake.
 
 ## Install
 
@@ -136,7 +144,7 @@ python3 als_downgrade.py "Song.als" --check
 3. El original y la copia quedan juntos en una carpeta **«Nombre (versiones)»**. El original nunca se modifica.
 4. Pulsa **Open in Live**.
 
-Si vuelves a abrir el mismo archivo, reutiliza tu copia y no sobrescribe tu trabajo. Probado de Live 12.4 a Live 12.0.20.
+Si vuelves a abrir el mismo archivo, reutiliza tu copia y no sobrescribe tu trabajo. Probado de Live 12.4 a Live 12.0.20 y a Live 12.2.
 
 ## Keywords
 
